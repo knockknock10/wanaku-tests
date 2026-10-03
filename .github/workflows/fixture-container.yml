@@ -92,5 +92,15 @@ jobs:
         env:
           IMAGE_TAG: sha-${{ github.sha }}
         run: |
-          docker buildx imagetools inspect "$IMAGE:$IMAGE_TAG"
-          docker buildx imagetools inspect "$IMAGE:latest"
+          set -euo pipefail
+
+          for tag in "$IMAGE_TAG" "latest"; do
+            output="$(docker buildx imagetools inspect "$IMAGE:$tag")"
+            printf '%s\n' "$output"
+
+            # Do not treat a successfully published single-architecture image
+            # as a valid result. Both required platforms must be present in the
+            # manifest list before the workflow can succeed.
+            grep -q 'linux/amd64' <<< "$output"
+            grep -q 'linux/arm64' <<< "$output"
+          done
