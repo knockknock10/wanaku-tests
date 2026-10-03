@@ -15,9 +15,22 @@ on:
 permissions:
   contents: read
 
+env:
+  IMAGE: quay.io/wanaku/test-mcp-server
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+            platform: linux/amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            platform: linux/arm64/v8
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up JDK 21
@@ -34,16 +47,43 @@ jobs:
           registry: quay.io
           username: ${{ secrets.QUAY_USERNAME }}
           password: ${{ secrets.QUAY_PASSWORD }}
-      - name: Build container
+      - name: Build application
         working-directory: fixtures/test-mcp-server
-        env:
-          PUSH_IMAGE: ${{ github.event_name != 'pull_request' && github.repository == 'wanaku-ai/wanaku-tests' && github.ref == 'refs/heads/main' }}
+        run: ./mvnw --batch-mode --no-transfer-progress clean package -DskipTests
+      - name: Build image
+        working-directory: fixtures/test-mcp-server
         run: |
-          ./mvnw --batch-mode --no-transfer-progress clean verify \
-            -Dquarkus.container-image.build=true \
-            -Dquarkus.container-image.push="$PUSH_IMAGE" \
-            -Dquarkus.container-image.registry=quay.io \
-            -Dquarkus.container-image.group=wanaku \
-            -Dquarkus.container-image.name=test-mcp-server \
-            -Dquarkus.container-image.tag=sha-${GITHUB_SHA} \
-            -Dquarkus.container-image.additional-tags=latest
+          docker build             --platform ${{ matrix.platform }}             -f src/main/docker/Dockerfile.jvm             -t "${IMAGE}:sha-${GITHUB_SHA}-${{ matrix.arch }}"             -t "${IMAGE}:latest-${{ matrix.arch }}"             .
+      - name: Publish architecture image
+        if: github.event_name != 'pull_request' && github.repository == 'wanaku-ai/wanaku-tests' && github.ref == 'refs/heads/main'
+        run: |
+          docker push "${IMAGE}:sha-${GITHUB_SHA}-${{ matrix.arch }}"
+          docker push "${IMAGE}:latest-${{ matrix.arch }}"
+
+  create-manifests:
+    if: github.repository == 'wanaku-ai/wanaku-tests' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to Container Registry
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: quay.io
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+      - name: Create multi-architecture manifests
+        run: |
+          docker manifest create "${IMAGE}:sha-${GITHUB_SHA}"             "${IMAGE}:sha-${GITHUB_SHA}-amd64"             "${IMAGE}:sha-${GITHUB_SHA}-arm64"
+          docker manifest push "${IMAGE}:sha-${GITHUB_SHA}"
+
+          docker manifest create "${IMAGE}:latest"             "${IMAGE}:latest-amd64"             "${IMAGE}:latest-arm64"
+          docker manifest push "${IMAGE}:latest"
+      - name: Verify published manifests
+        run: |
+          docker manifest inspect "${IMAGE}:sha-${GITHUB_SHA}" > /tmp/sha-manifest.json
+          docker manifest inspect "${IMAGE}:latest" > /tmp/latest-manifest.json
+
+          jq -e '[.manifests[].platform | select(.os == "linux" and .architecture == "amd64")] | length == 1' /tmp/sha-manifest.json
+          jq -e '[.manifests[].platform | select(.os == "linux" and .architecture == "arm64" and .variant == "v8")] | length == 1' /tmp/sha-manifest.json
+          jq -e '[.manifests[].platform | select(.os == "linux" and .architecture == "amd64")] | length == 1' /tmp/latest-manifest.json
+          jq -e '[.manifests[].platform | select(.os == "linux" and .architecture == "arm64" and .variant == "v8")] | length == 1' /tmp/latest-manifest.json
