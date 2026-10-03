@@ -26,8 +26,10 @@ jobs:
         include:
           - os: ubuntu-latest
             architecture: amd64
+            platform: linux/amd64
           - os: ubuntu-24.04-arm
             architecture: arm64
+            platform: linux/arm64/v8
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -59,7 +61,8 @@ jobs:
             -Dquarkus.container-image.group=wanaku \
             -Dquarkus.container-image.name=test-mcp-server \
             -Dquarkus.container-image.tag="$IMAGE_TAG" \
-            -Dquarkus.container-image.additional-tags="$LATEST_TAG"
+            -Dquarkus.container-image.additional-tags="$LATEST_TAG" \
+            -Dquarkus.jib.platforms="${{ matrix.platform }}"
 
   create-manifests:
     if: github.event_name != 'pull_request' && github.repository == 'wanaku-ai/wanaku-tests' && github.ref == 'refs/heads/main'
